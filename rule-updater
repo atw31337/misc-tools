@@ -1,0 +1,60 @@
+#!/bin/bash
+# Title: rule-updater
+# Description: Checks the modifysid.conf file for modifications to rules, changes rules via local.rules and runs a rule-update on the server and sensors.
+# This script is intended to simplify the process of making identical changes to multiple SIDs
+# Author: Andrew T. Withers (atw31337@gmail.com) 
+
+# Convert modifysid.conf SIDs to local rules (local.rules)
+while read modifysid_line; do
+	if [[ ${modifysid_line::1} != '#' ]] && [[ "$modifysid_line" != '' ]]; then
+		# Get the SIDs that need to be modified
+		SIDs="$(echo $modifysid_line | cut -d'"' -f1)"
+		# Substitute spaces for commmas
+		SIDs=${SIDs//,/ }
+		# Load the SIDs into an array
+		sidarr=($SIDs)
+		# Ensure that local.rules exists
+		if ! [[ -f /etc/nsm/rules/local.rules ]]; then
+			touch /etc/nsm/rules/local.rules
+		fi
+		for i in "${sidarr[@]}"; do
+			# Make sure that the rule does not already exist in local.rules and it is not commented in downloaded.rules
+			if ! grep -q sid:$i /etc/nsm/rules/local.rules && [[ $(grep sid:$i /etc/nsm/rules/downloaded.rules | head -n1 | cut -c 1) != '#' ]]; then
+				# Get rule from downloaded.rules
+				RULE="$(grep sid:$i /etc/nsm/rules/downloaded.rules | head -n1)"
+				# Substitute the modifications
+				RULE=${RULE/$(echo "$modifysid_line" | cut -d '"' -f2)/$(echo "$modifysid_line" | cut -d '"' -f4)}
+				# Add the rule to local.rules
+				echo "$RULE" >> /etc/nsm/rules/local.rules
+				# Add the SID to disablesid.conf
+				echo "1:$i" >> /etc/nsm/pulledpork/disablesid.conf
+			fi
+		done
+		unset sidarr
+	fi
+done < /etc/nsm/pulledpork/modifysid.conf
+# Remove signatures from local.rules and disablesid.conf that are no longer in modifysid.conf
+while read local_line; do	# Process each rule in local.rules
+	SID="$(echo $local_line | grep -oe 'sid:[0-9]*' | cut -d':' -f2)"
+	# It is assumed that the SID does not exist until it is actually found in modifysid.conf
+	FOUND=0
+	# Search each non-commented lines of modifysid.conf for the SID.
+	while read modify_line; do
+		if [[ ${modify_line::1} != '#' ]] && [[ -n $modify_line ]]; then
+			if echo "$modify_line" | grep -q $SID; then
+				FOUND=1
+				break
+			fi
+		fi
+	done < /etc/nsm/pulledpork/modifysid.conf
+	# If the SID was not found in modifysid.conf remove it from local.rules and disablesid.conf
+	if [[ $FOUND == 0 ]]; then
+		sed -i "/sid:$SID/d" /etc/nsm/rules/local.rules
+		sed -i "/1:$SID/d" /etc/nsm/pulledpork/disablesid.conf
+	fi
+done < /etc/nsm/rules/local.rules
+
+# Run the rule-update script
+rule-update >> /dev/null
+
+exit
