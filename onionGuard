@@ -1,0 +1,298 @@
+#!/bin/bash
+# onionGuard
+# Verifies the operational status of the NSM services on each of the IDS machines. If a service has failed, this script will attempt to restart
+# that service. If the service continues to fail, an alert email will be dispatched.
+# Version: 1.02
+# Author: Andrew Withers
+
+usage()
+{
+cat <<EOF
+
+Security Onion Status Monitor
+Usage: onionGuard [HOSTNAME] or [OPTION] <HOSTNAME>
+
+	Options:
+
+		-d <HOSTNAME,ALL>       Disables status checking on the specified host
+		-e <HOSTNAME,ALL>       Enables status checking on the specified host
+		-s		      Displays the enable/disable status summary
+		-q 			Quiet. Non-interactive self-healing mode.
+
+EOF
+}
+
+load_var()
+{
+EMAIL=$(grep EMAIL /etc/onionGuard.conf | cut -d" " -f1 | cut -d"=" -f2)
+SGUIL=$(grep SGUIL /etc/onionGuard.conf | cut -d"=" -f2)
+SCI=$(grep MEDUSA-SCI /etc/onionGuard.conf | cut -d"=" -f2)
+IST=$(grep MEDUSA-IST /etc/onionGuard.conf | cut -d"=" -f2)
+}
+
+summary()
+{
+	# Reload variables in case of changes
+	load_var
+
+	if [[ "$SGUIL" == "1" ]]; then
+		echo -e "SGUIL: \e[32mEnabled\e[0m"
+	else
+		echo -e "SGUIL: \e[91mDisabled\e[0m"
+	fi
+	if [[ "$SCI" == "1" ]]; then
+		echo -e "MEDUSA-SCI: \e[32mEnabled\e[0m"
+	else
+		echo -e "MEDUSA-SCI: \e[91mDisabled\e[0m"
+	fi
+	if [[ "$IST" == "1" ]]; then
+		echo -e "MEDUSA-IST: \e[32mEnabled\e[0m"
+	else
+		echo -e "MEDUSA-IST: \e[91mDisabled\e[0m"
+	fi
+}
+
+disable()
+{
+	OPTARG=${1^^}
+	if [[ "$OPTARG" == "ALL" ]]; then
+		sed -i "s/=1/=0/g" "/etc/onionGuard.conf"
+		echo "Status checking has been disabled."
+	else
+		sed -i "s/$OPTARG=1/$OPTARG=0/" "/etc/onionGuard.conf"
+	fi
+	summary
+}
+
+enable()
+{
+	OPTARG="${1^^}"
+	if [[ "$OPTARG" == "ALL" ]]; then
+		sed -i "s/=0/=1/g" "/etc/onionGuard.conf"
+		echo "Status checking has been enabled."
+	else
+		sed -i "s/$OPTARG=0/$OPTARG=1/" "/etc/onionGuard.conf"
+	fi
+	summary
+}
+
+quiet-check()
+{
+	exec 1>>/var/log/onionGuard.log
+	exec 2>>/var/log/onionGuard.err
+
+	if [[ "$SGUIL" == "1" ]]; then
+		if so-status | grep -q FAIL; then
+			echo -e "\n$(date)"
+			so-restart
+			sleep 5
+			if so-status | grep -q FAIL; then
+				printf "To: %s\nSubject: Security Onion Status Alert\nFrom: %s\n\n%s" "$EMAIL" "$HOSTNAME" "$(so-status | grep FAIL)" | sendmail -vt
+				onionGuard -d sguil
+			fi
+		fi
+	fi
+
+	if [[ "$IST" == "1" ]]; then
+		salt "medusa-ist" cmd.run "so-status" > /tmp/onionGuard.tmp
+		if grep -q "Minion did not return" /tmp/onionGuard.tmp; then
+			# Minion cannot be reached. Wait 10 seconds and try again
+			sleep 10
+			salt "medusa-ist" cmd.run "so-status" > /tmp/onionGuard.tmp
+			if grep -q "Minion did not return" /tmp/onionGuard.tmp; then
+				# Minion cannot be reached. Dispatch an alert email
+				printf "To: %s\nSubject: Security Onion Status Alert\nFrom: %s\n\n%s\n%s" "$EMAIL" "$HOSTNAME" "$(date)" "$(cat /tmp/onionGuard.tmp)" | sendmail -vt
+			fi
+		elif grep -q FAIL /tmp/onionGuard.tmp || grep -q stopped /tmp/onionGuard.tmp; then
+			# Check for stopped or failed processes and attempt to restart
+			if grep -q stopped /tmp/onionGuard.tmp; then
+				if  grep stopped /tmp/onionGuard.tmp | grep -q "so-autossh"; then
+					echo -e "\n$(date)"
+					salt "medusa-ist" cmd.run "so-autossh-restart"
+					if grep stopped /tmp/onionGuard.tmp | grep -vq so-autossh; then 
+						echo -e "\n$(date)"
+						salt "medusa-ist" cmd.run "so-bro-restart"
+					fi
+				else
+					echo -e "\n$(date)"
+					salt "medusa-ist" cmd.run "so-bro-restart"
+				fi
+			fi
+			if grep -q FAIL /tmp/onionGuard.tmp; then
+				for ((i=1; i<=$(grep -c FAIL /tmp/onionGuard.tmp);i++)); do
+					FAILEDPS="$(grep FAIL /tmp/onionGuard.tmp | head -n$i | tail -n1)"
+					if echo "$FAILEDPS" | grep -q "ossec_agent"; then
+						echo -e "\n$(date)"
+						salt "medusa-ist" cmd.run "so-ossec-agent-restart"
+					elif echo "$FAILEDPS" | grep -q "netsniff-ng"; then
+						echo -e "\n$(date)"
+						salt "medusa-ist" cmd.run "so-pcap-restart"
+					elif echo "$FAILEDPS" | grep -q "pcap_agent"; then
+						echo -e "\n$(date)"
+						salt "medusa-ist" cmd.run "so-pcap-agent-restart"
+					elif echo "$FAILEDPS" | grep -q "snort_agent"; then
+						echo -e "\n$(date)"
+						salt "medusa-ist" cmd.run "so-nids-agent-restart"
+					elif echo "$FAILEDPS" | grep -q "suricata \| snort"; then
+						echo -e "\n$(date)"
+						salt "medusa-ist" cmd.run "so-nids-restart"
+					elif echo "$FAILEDPS" | grep -q "barnyard2"; then
+						echo -e "\n$(date)"
+						salt "medusa-ist" cmd.run "so-barnyard-restart"
+					elif echo "$FAILEDPS" | grep -q "so-elasticsearch"; then
+						echo -e "\n$(date)"
+						salt "medusa-ist" cmd.run "so-elasticsearch-restart"
+					elif echo "$FAILEDPS" | grep -q "so-logstash"; then
+						echo -e "\n$(date)"
+						salt "medusa-ist" cmd.run "so-logstash-restart"
+					elif echo "$FAILEDPS" | grep -q "so-curator"; then
+						echo -e "\n$(date)"
+						salt "medusa-ist" cmd.run "so-curator-restart"
+					else
+						echo "$(date): Unable to restart unrecognized failed process: $FAILEDPS" >> /var/log/onionGuard.err
+						echo -e "\n$(date)"
+						so-restart 	# If the failed process(es) cannot be identified then restart all security onion processes
+					fi
+				done
+			fi
+			sleep 5
+			# Recheck the status of all processes and dispatch an alert email if necessary
+			salt "medusa-ist" cmd.run "so-status" > /tmp/onionGuard.tmp
+			if  grep -q FAIL /tmp/onionGuard.tmp || grep -q stopped /tmp/onionGuard.tmp; then
+				printf "To:%s\nSubject: Security Onion status alert!\nFrom:%s\n\n%s\nOne or more Security Onion processes has failed!\n%s" \
+				"$EMAIL" "$HOSTNAME" "$(date)" "$(cat /tmp/onionGuard.tmp)" | sendmail -vt
+				onionGuard -d medusa-ist
+			fi
+		fi
+	fi
+
+	if [[ "$SCI" == "1" ]]; then
+		salt "medusa-sci" cmd.run "so-status" > /tmp/onionGuard.tmp
+		if grep -q "Minion did not return" /tmp/onionGuard.tmp; then
+			# Minion cannot be reached. Wait 10 seconds and try again
+			sleep 10
+			salt "medusa-ist" cmd.run "so-status" > /tmp/onionGuard.tmp
+			if grep -q "Minion did not return" /tmp/onionGuard.tmp; then
+				# Minion cannot be reached. Dispatch an alert email
+				printf "To: %s\nSubject: Security Onion Status Alert\nFrom: %s\n\n%s\n%s" "$EMAIL" "$HOSTNAME" "$(date)" "$(cat /tmp/onionGuard.tmp)" | sendmail -vt
+			fi
+		elif grep -q FAIL /tmp/onionGuard.tmp || grep -q stopped /tmp/onionGuard.tmp; then
+			# Check for stopped or failed processes and attempt to restart
+			if grep -q stopped /tmp/onionGuard.tmp; then
+				if  grep stopped /tmp/onionGuard.tmp | grep -q "so-autossh"; then
+					echo -e "\n$(date)"
+					salt "medusa-sci" cmd.run "so-autossh-restart"
+					if grep stopped /tmp/onionGuard.tmp | grep -vq so-autossh; then
+						echo -e "\n$(date)"
+						salt "medusa-sci" cmd.run "so-bro-restart"
+					fi
+				else
+					echo -e "\n$(date)"
+					salt "medusa-sci" cmd.run "so-bro-restart"
+				fi
+			fi
+			if grep -q FAIL /tmp/onionGuard.tmp; then
+				for ((i=1; i<=$(grep -c FAIL /tmp/onionGuard.tmp);i++)); do
+					FAILEDPS="$(grep FAIL /tmp/onionGuard.tmp | head -n$i | tail -n1)"
+					if echo "$FAILEDPS" | grep -q "ossec_agent"; then
+						echo -e "\n$(date)"
+						salt "medusa-sci" cmd.run "so-ossec-agent-restart"
+					elif echo "$FAILEDPS" | grep -q "netsniff-ng"; then
+						echo -e "\n$(date)"
+						salt "medusa-sci" cmd.run "so-pcap-restart"
+					elif echo "$FAILEDPS" | grep -q "pcap_agent"; then
+						echo -e "\n$(date)"
+						salt "medusa-sci" cmd.run "so-pcap-agent-restart"
+					elif echo "$FAILEDPS" | grep -q "snort_agent"; then
+						echo -e "\n$(date)"
+						salt "medusa-sci" cmd.run "so-nids-agent-restart"
+					elif echo "$FAILEDPS" | grep -q "suricata \| snort"; then
+						echo -e "\n$(date)"
+						salt "medusa-sci" cmd.run "so-nids-restart"
+					elif echo "$FAILEDPS" | grep -q "barnyard2"; then
+						echo -e "\n$(date)"
+						salt "medusa-sci" cmd.run "so-barnyard-restart"
+					elif echo "$FAILEDPS" | grep -q "so-elasticsearch"; then
+						echo -e "\n$(date)"
+						salt "medusa-sci" cmd.run "so-elasticsearch-restart"
+					elif echo "$FAILEDPS" | grep -q "so-logstash"; then
+						echo -e "\n$(date)"
+						salt "medusa-sci" cmd.run "so-logstash-restart"
+					elif echo "$FAILEDPS" | grep -q "so-curator"; then
+						echo -e "\n$(date)"
+						salt "medusa-sci" cmd.run "so-curator-restart"
+					else
+						echo "$(date): Unable to restart unrecognized failed process: $FAILEDPS" >> /var/log/onionGuard.err
+						echo -e "\n$(date)"
+						so-restart	# If the failed process(es) cannot be identified then restart all Security Onion processes
+					fi
+				done
+			fi
+			sleep 5
+			# Recheck the status of all processes and dispatch an alert email if necessary
+			salt "medusa-sci" cmd.run "so-status" > /tmp/onionGuard.tmp
+			if grep -q FAIL /tmp/onionGuard.tmp || grep -q stopped /tmp/onionGuard.tmp; then
+				printf "To:%s\nSubject: Security Onion status alert!\nFrom:%s\n\n%s\nOne or more Security Onion processes has failed!\n%s" \
+				"$EMAIL" "$HOSTNAME" "$(date)" "$(cat /tmp/onionGuard.tmp)" | sendmail -vt
+				onionGuard -d medusa-sci
+			fi
+		fi
+	fi
+	if [[ -e /tmp/onionGuard.tmp ]]; then
+	rm /tmp/onionGuard.tmp
+	fi
+}
+
+# Load variables
+load_var
+
+# Parse options
+while getopts ":hd:e:sq" OPT; do
+	case $OPT in
+	h)
+		usage
+		exit
+		;;
+	d)
+		disable "$OPTARG"
+		exit
+		;;
+	e)
+		enable "$OPTARG"
+		exit
+		;;
+	s)
+		summary
+		exit
+		;;
+	q)
+		quiet-check
+		exit
+		;;
+	\?)
+		echo "Invalid option: -$OPTARG"
+		exit 1
+		;;
+	:)
+		echo "Option -$OPTARG requires an argument."
+		exit 1
+		;;
+	esac
+done
+HOST="$1"
+HOST="${HOST,,}"
+if [[ "$HOST" == "" ]]; then
+	salt "*" cmd.run "so-status" > /tmp/onionGuard.tmp
+else
+	salt "$HOST" cmd.run "so-status" > /tmp/onionGuard.tmp
+fi
+sed -i 's/OK/\\e[92m&\\e[0m/g' "/tmp/onionGuard.tmp"
+sed -i 's/running/\\e[92m&\\e[0m/g' "/tmp/onionGuard.tmp"
+sed -i 's/FAIL/\\e[91m&\\e[0m/g' "/tmp/onionGuard.tmp"
+sed -i 's/stopped/\\e[91m&\\e[0m/g' "/tmp/onionGuard.tmp"
+echo -e "$(cat /tmp/onionGuard.tmp)"
+
+if [[ -e /tmp/onionGuard.tmp ]]; then
+	rm /tmp/onionGuard.tmp
+fi
+exit

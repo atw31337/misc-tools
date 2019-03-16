@@ -1,0 +1,174 @@
+#!/bin/bash
+# arteGuard
+# Description: arteGuard retrieves the operational status of artemis on each of the IDS sensors. If artemis is not running, 
+# arteGuard will attempt to restart the service. If the service cannot be restarted, an alert email will be dispatched.
+# Version: 1.0
+# Author: Andrew Withers
+
+usage()
+{
+cat <<EOF
+
+ArteGuard: Artemis Status Monitor
+Usage: arteGuard [OPTION] <HOSTNAME>
+
+	Options:
+
+		-d <HOSTNAME>	Disables status checking on the specified host
+		-e <HOSTNAME> 	Enables status checking on the specified host
+		-s		Displays the enable/disable status summary
+		-q		Quiet. Non-interactive self-healing mode.
+
+EOF
+}
+
+load_var()
+{
+EMAIL=$(grep EMAIL /etc/arteGuard.conf | cut -d" " -f1 | cut -d"=" -f2)
+SGUIL=$(grep SGUIL /etc/arteGuard.conf | cut -d"=" -f2)
+SCI=$(grep MEDUSA-SCI /etc/arteGuard.conf | cut -d"=" -f2)
+IST=$(grep MEDUSA-IST /etc/arteGuard.conf | cut -d"=" -f2)
+}
+
+summary()
+{
+        # Reload variables in case of changes
+        load_var
+
+        if [[ "$SGUIL" == "1" ]]; then
+		echo -e "SGUIL: \e[32mEnabled\e[0m"
+	else
+		echo -e "SGUIL: \e[91mDisabled\e[0m"
+	fi
+	if [[ "$SCI" == "1" ]]; then
+                echo -e "MEDUSA-SCI: \e[32mEnabled\e[0m"
+        else
+                echo -e "MEDUSA-SCI: \e[91mDisabled\e[0m"
+        fi
+        if [[ "$IST" == "1" ]]; then
+                echo -e "MEDUSA-IST: \e[32mEnabled\e[0m"
+        else
+                echo -e "MEDUSA-IST: \e[91mDisabled\e[0m"
+        fi
+}
+
+disable()
+{
+        OPTARG=${1^^}
+        if [[ "$OPTARG" == "ALL" ]]; then
+                sed -i "s/=1/=0/g" "/etc/arteGuard.conf"
+                echo "Status checking has been disabled."
+        else
+                sed -i "s/$OPTARG=1/$OPTARG=0/" "/etc/arteGuard.conf"
+        fi
+        summary
+}
+
+enable()
+{
+        OPTARG="${1^^}"
+        if [[ "$OPTARG" == "ALL" ]]; then
+                sed -i "s/=0/=1/g" "/etc/arteGuard.conf"
+                echo "Status checking has been enabled."
+        else
+                sed -i "s/$OPTARG=0/$OPTARG=1/" "/etc/arteGuard.conf"
+        fi
+        summary
+}
+
+quiet-check()
+{
+exec 1>>/var/log/arteGuard.log
+exec 2>>/var/log/arteGuard.err
+
+if [[ "$SGUIL" == "1" ]]; then
+	service artemis status > /tmp/arteGuard.tmp
+	if grep -q "dead" /tmp/arteGuard.tmp; then
+		service artemis start
+		service artemis status > /arteGuard.tmp
+		if grep -q "dead" /tmp/arteGuard.tmp; then
+			printf "To: %s\nSubject: Artemis Status Alert\nFrom: %s\n\n%s\nsguil: Artemis scanner is inactive." "$EMAIL" "$HOSTNAME" "$(date)" | sendmail -vt
+		fi
+	fi
+fi
+if [[ "$IST" == "1" ]]; then
+	salt "medusa-ist" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
+	if grep -q "dead" /tmp/arteGuard.tmp; then
+		salt "medusa-ist" cmd.run "service artemis-forwarder start"
+		salt "medusa-ist" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
+		if grep -q "dead" /tmp/arteGuard.tmp; then
+			printf "To: %s\nSubject: Artemis Status Alert\nFrom: %s\n\n%s\nmedusa-ist: Artemis-forwarder is inactive." "$EMAIL" "$HOSTNAME" "$(date)" | sendmail -vt
+		fi
+	fi
+fi
+if [[ "$SCI" == "1" ]]; then
+	salt "medusa-sci" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
+        if grep -q "dead" /tmp/arteGuard.tmp; then
+                salt "medusa-sci" cmd.run "service artemis-forwarder start"
+                salt "medusa-sci" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
+                if grep -q "dead" /tmp/arteGuard.tmp; then
+                        printf "To: %s\nSubject: Artemis Status Alert\nFrom: %s\n\n%s\nmedusa-sci: Artemis-forwarder is inactive." "$EMAIL" "$HOSTNAME" "$(date)" | sendmail -vt
+                fi
+        fi
+fi
+if [[ -e /tmp/arteGuard.tmp ]]; then
+        rm /tmp/arteGuard.tmp
+fi
+}
+
+# Load variables
+load_var
+
+# Parse options
+while getopts ":hd:e:sq" OPT; do
+        case $OPT in
+        h)
+                usage
+                exit
+                ;;
+        d)
+                disable "$OPTARG"
+                exit
+                ;;
+        e)
+                enable "$OPTARG"
+                exit
+                ;;
+        s)
+                summary
+                exit
+                ;;
+        q)
+                quiet-check
+                exit
+                ;;
+        \?)
+                echo "Invalid option: -$OPTARG"
+                exit 1
+                ;;
+        :)
+                echo "Option -$OPTARG requires an argument."
+                exit 1
+		;;
+        esac
+done
+HOST="$1"
+HOST="${HOST,,}"
+if [[ "$HOST" == "" ]]; then
+        service artemis status > /tmp/arteGuard.tmp
+	salt "m*" cmd.run "service artemis-forwarder status" >> /tmp/arteGuard.tmp
+else
+        if [[ "$HOST" == "sguil" ]]; then
+		service artemis status > /tmp/arteGuard.tmp
+	else
+		salt "$HOST" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
+	fi
+fi
+sed -i 's/dead/\\e[91m&\\e[0m/g' "/tmp/arteGuard.tmp"
+sed -i 's/ active /\\e[92m&\\e[0m/g' "/tmp/arteGuard.tmp"
+echo -e "$(cat /tmp/arteGuard.tmp)"	# using echo -e interprets the color codes rather than printing them
+
+if [[ -e /tmp/arteGuard.tmp ]]; then
+        rm /tmp/arteGuard.tmp
+fi
+exit
