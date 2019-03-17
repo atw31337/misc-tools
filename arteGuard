@@ -17,39 +17,31 @@ Usage: arteGuard [OPTION] <HOSTNAME>
 		-d <HOSTNAME>	Disables status checking on the specified host
 		-e <HOSTNAME> 	Enables status checking on the specified host
 		-s		Displays the enable/disable status summary
-		-q		Quiet. Non-interactive self-healing mode.
+		-q		Quiet. Non-interactive self-healing mode
+		-c 		Configuration mode
 
 EOF
 }
 
-load_var()
-{
+load_var() {
+declare -Ag nodes
 EMAIL=$(grep EMAIL /etc/arteGuard.conf | cut -d" " -f1 | cut -d"=" -f2)
-SGUIL=$(grep SGUIL /etc/arteGuard.conf | cut -d"=" -f2)
-SCI=$(grep MEDUSA-SCI /etc/arteGuard.conf | cut -d"=" -f2)
-IST=$(grep MEDUSA-IST /etc/arteGuard.conf | cut -d"=" -f2)
+while read line; do
+	nodes["$(echo $line | cut -d'=' -f1)"]="$(echo $line | cut -d'=' -f2)"
+done < <(tail -n +$(( $(grep -n Nodes /etc/arteGuard.conf | cut -d':' -f1) + 1 )) /etc/arteGuard.conf)
 }
 
-summary()
-{
-        # Reload variables in case of changes
-        load_var
+summary() {
+# Reload variables in case of changes
+load_var
 
-        if [[ "$SGUIL" == "1" ]]; then
-		echo -e "SGUIL: \e[32mEnabled\e[0m"
+for i in "${!nodes[@]}"; do
+	if [[ "${nodes[$i]}" == "1" ]]; then
+		echo -e "$i: \e[32mEnabled\e[0m"
 	else
-		echo -e "SGUIL: \e[91mDisabled\e[0m"
+		echo -e "$i: \e[91mDisabled\e[0m"
 	fi
-	if [[ "$SCI" == "1" ]]; then
-                echo -e "MEDUSA-SCI: \e[32mEnabled\e[0m"
-        else
-                echo -e "MEDUSA-SCI: \e[91mDisabled\e[0m"
-        fi
-        if [[ "$IST" == "1" ]]; then
-                echo -e "MEDUSA-IST: \e[32mEnabled\e[0m"
-        else
-                echo -e "MEDUSA-IST: \e[91mDisabled\e[0m"
-        fi
+done
 }
 
 disable()
@@ -76,51 +68,90 @@ enable()
         summary
 }
 
+config() {
+SCANNER="$HOSTNAME"
+confirm=0
+numNodes=0
+declare hosts
+echo "arteGuard configuration setup"
+while [[ "$confirm" -eq 0 ]]; do
+	read -p "Enter the email address where you would like to receive failure alerts: " EMAIL
+	while ! [[ "$numNodes"  =~ ^[1-9]+$ ]]; do
+		read -p "How many forwarding nodes will be monitored?: " numNodes
+		if ! [[ "$numNodes"  =~ ^[1-9]+$ ]]; then
+			echo "Invalid entry. Try again."
+		fi
+	done
+	for (( i=0; i < $numNodes; i++ )); do
+		read -p "Enter the hostname of node $((i+1)): " hosts["$i"]
+	done
+	echo "Configuration: "
+	echo "Email address: $EMAIL"
+	echo "Scanner node: ${SCANNER^^}"
+	echo "Forwarding nodes: "
+	for i in "${hosts[@]}"; do
+		echo "${i^^}"
+	done
+	read -p "Is this configuration correct? [y/N]: " answer
+	if [[ ${answer,,} == 'y' ]]; then
+		confirm=1
+		echo "Generating arteGuard.conf"
+	else
+		echo "Lets try again"
+	fi
+done
+cat <<EOF > /etc/arteGuard.conf
+EMAIL="$EMAIL"
+SCANNER=${SCANNER^^}
+
+######### Nodes #########
+${HOSTNAME^^}=1
+EOF
+for i in "${hosts[@]}"; do
+	echo "${i^^}=1" >> /etc/arteGuard.conf
+done
+echo "Configuration complete"
+}
+
+
 quiet-check()
 {
 exec 1>>/var/log/arteGuard.log
 exec 2>>/var/log/arteGuard.err
 
-if [[ "$SGUIL" == "1" ]]; then
-	service artemis status > /tmp/arteGuard.tmp
-	if grep -q "dead" /tmp/arteGuard.tmp; then
-		service artemis start
-		service artemis status > /arteGuard.tmp
-		if grep -q "dead" /tmp/arteGuard.tmp; then
-			printf "To: %s\nSubject: Artemis Status Alert\nFrom: %s\n\n%s\nsguil: Artemis scanner is inactive." "$EMAIL" "$HOSTNAME" "$(date)" | sendmail -vt
+# Load variables
+load_var
+
+for i in "${!nodes[@]}"; do
+	if [[ ${nodes[$i]} -eq 1 ]]; then
+		if [[ $i == $(grep SCANNER /etc/arteGuard.conf | cut -d'=' -f2) ]]; then
+			service artemis status > /tmp/arteGuard.tmp
+			if grep -q "dead" /tmp/arteGuard.tmp; then
+				service artemis start
+				service artemis status > /arteGuard.tmp
+				if grep -q "dead" /tmp/arteGuard.tmp; then
+					printf "To: %s\nSubject: Artemis Status Alert\nFrom: %s\n\n%s\n%s: Artemis scanner is inactive." "$EMAIL" "$HOSTNAME" "$(date)" "${i,,}" | sendmail -vt
+				fi
+			fi
+		else
+			salt "${i,,}" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
+			if grep -q "dead" /tmp/arteGuard.tmp; then
+				salt "${i,,}" cmd.run "service artemis-forwarder start"
+				salt "${i,,}" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
+				if grep -q "dead" /tmp/arteGuard.tmp; then
+					printf "To: %s\nSubject: Artemis Status Alert\nFrom: %s\n\n%s\%s: Artemis-forwarder is inactive." "$EMAIL" "$HOSTNAME" "$(date)" "${i,,}" | sendmail -vt
+				fi
+			fi
 		fi
 	fi
-fi
-if [[ "$IST" == "1" ]]; then
-	salt "medusa-ist" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
-	if grep -q "dead" /tmp/arteGuard.tmp; then
-		salt "medusa-ist" cmd.run "service artemis-forwarder start"
-		salt "medusa-ist" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
-		if grep -q "dead" /tmp/arteGuard.tmp; then
-			printf "To: %s\nSubject: Artemis Status Alert\nFrom: %s\n\n%s\nmedusa-ist: Artemis-forwarder is inactive." "$EMAIL" "$HOSTNAME" "$(date)" | sendmail -vt
-		fi
-	fi
-fi
-if [[ "$SCI" == "1" ]]; then
-	salt "medusa-sci" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
-        if grep -q "dead" /tmp/arteGuard.tmp; then
-                salt "medusa-sci" cmd.run "service artemis-forwarder start"
-                salt "medusa-sci" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
-                if grep -q "dead" /tmp/arteGuard.tmp; then
-                        printf "To: %s\nSubject: Artemis Status Alert\nFrom: %s\n\n%s\nmedusa-sci: Artemis-forwarder is inactive." "$EMAIL" "$HOSTNAME" "$(date)" | sendmail -vt
-                fi
-        fi
-fi
+done
 if [[ -e /tmp/arteGuard.tmp ]]; then
         rm /tmp/arteGuard.tmp
 fi
 }
 
-# Load variables
-load_var
-
 # Parse options
-while getopts ":hd:e:sq" OPT; do
+while getopts ":hd:e:sqc" OPT; do
         case $OPT in
         h)
                 usage
@@ -142,7 +173,11 @@ while getopts ":hd:e:sq" OPT; do
                 quiet-check
                 exit
                 ;;
-        \?)
+        c)
+		config
+		exit
+		;;
+	\?)
                 echo "Invalid option: -$OPTARG"
                 exit 1
                 ;;
@@ -152,16 +187,32 @@ while getopts ":hd:e:sq" OPT; do
 		;;
         esac
 done
+
+# Load variables
+load_var
+
 HOST="$1"
-HOST="${HOST,,}"
+HOST="${HOST^^}"
 if [[ "$HOST" == "" ]]; then
-        service artemis status > /tmp/arteGuard.tmp
-	salt "m*" cmd.run "service artemis-forwarder status" >> /tmp/arteGuard.tmp
+        if [[ -f /tmp/arteGuard.tmp ]]; then
+		rm /tmp/arteGuard.tmp
+	fi
+	for i in "${!nodes[@]}"; do
+		if [[ $i == $(grep SCANNER /etc/arteGuard.conf | cut -d'=' -f2) ]]; then
+			salt "${i,,}" cmd.run "service artemis status" >> /tmp/arteGuard.tmp
+		else
+			salt "${i,,}" cmd.run "service artemis-forwarder status" >> /tmp/arteGuard.tmp
+		fi
+	done
 else
-        if [[ "$HOST" == "sguil" ]]; then
-		service artemis status > /tmp/arteGuard.tmp
+        if [[ ${nodes[$HOST]} ]]; then
+		if [[ $HOST == $(grep SCANNER /etc/arteGuard.conf | cut -d'=' -f2) ]]; then
+			service artemis status > /tmp/arteGuard.tmp
+		else
+			salt "${HOST,,}" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
+		fi
 	else
-		salt "$HOST" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
+		echo "Invalid host" > /tmp/arteGuard.tmp
 	fi
 fi
 sed -i 's/dead/\\e[91m&\\e[0m/g' "/tmp/arteGuard.tmp"
