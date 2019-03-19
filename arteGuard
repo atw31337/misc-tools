@@ -124,8 +124,8 @@ exec 2>>/var/log/arteGuard.err
 load_var
 
 for i in "${!nodes[@]}"; do
-	if [[ ${nodes[$i]} -eq 1 ]]; then
-		if [[ $i == $SCANNER ]]; then
+	if [[ ${nodes[$i]} == "1" ]]; then
+		if [[ $i == "$SCANNER" ]]; then
 			service artemis status > /tmp/arteGuard.tmp
 			if grep -q "dead" /tmp/arteGuard.tmp; then
 				service artemis start
@@ -199,22 +199,20 @@ if [[ "$HOST" == "" ]]; then
 		rm /tmp/arteGuard.tmp
 	fi
 	for i in "${!nodes[@]}"; do
-		if [[ $i == $SCANNER ]]; then
+		if [[ $i == "$SCANNER" ]]; then
 			service artemis status >> /tmp/arteGuard.tmp
 		else
 			salt "${i,,}" cmd.run "service artemis-forwarder status" >> /tmp/arteGuard.tmp
 		fi
 	done
-else
-        if [[ ${nodes[$HOST]} ]]; then
-		if [[ $HOST == $SCANNER ]]; then
-			service artemis status > /tmp/arteGuard.tmp
-		else
-			salt "${HOST,,}" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
-		fi
+elif [[ ${nodes[$HOST]} ]]; then
+	if [[ $HOST == "$SCANNER" ]]; then
+		service artemis status > /tmp/arteGuard.tmp
 	else
-		echo "Invalid host" > /tmp/arteGuard.tmp
+		salt "${HOST,,}" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
 	fi
+else
+	echo "Invalid host" > /tmp/arteGuard.tmp
 fi
 sed -i 's/dead/\\e[91m&\\e[0m/g' "/tmp/arteGuard.tmp"
 sed -i 's/ active /\\e[92m&\\e[0m/g' "/tmp/arteGuard.tmp"
