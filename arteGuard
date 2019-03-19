@@ -26,6 +26,7 @@ EOF
 load_var() {
 declare -Ag nodes
 EMAIL=$(grep EMAIL /etc/arteGuard.conf | cut -d" " -f1 | cut -d"=" -f2)
+SCANNER=$(grep SCANNER /etc/arteGuard.conf | cut -d'=' -f2)
 while read line; do
 	nodes["$(echo $line | cut -d'=' -f1)"]="$(echo $line | cut -d'=' -f2)"
 done < <(tail -n +$(( $(grep -n Nodes /etc/arteGuard.conf | cut -d':' -f1) + 1 )) /etc/arteGuard.conf)
@@ -124,7 +125,7 @@ load_var
 
 for i in "${!nodes[@]}"; do
 	if [[ ${nodes[$i]} -eq 1 ]]; then
-		if [[ $i == $(grep SCANNER /etc/arteGuard.conf | cut -d'=' -f2) ]]; then
+		if [[ $i == $SCANNER ]]; then
 			service artemis status > /tmp/arteGuard.tmp
 			if grep -q "dead" /tmp/arteGuard.tmp; then
 				service artemis start
@@ -139,7 +140,7 @@ for i in "${!nodes[@]}"; do
 				salt "${i,,}" cmd.run "service artemis-forwarder start"
 				salt "${i,,}" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
 				if grep -q "dead" /tmp/arteGuard.tmp; then
-					printf "To: %s\nSubject: Artemis Status Alert\nFrom: %s\n\n%s\%s: Artemis-forwarder is inactive." "$EMAIL" "$HOSTNAME" "$(date)" "${i,,}" | sendmail -vt
+					printf "To: %s\nSubject: Artemis Status Alert\nFrom: %s\n\n%s\n%s: Artemis-forwarder is inactive." "$EMAIL" "$HOSTNAME" "$(date)" "${i,,}" | sendmail -vt
 				fi
 			fi
 		fi
@@ -198,15 +199,15 @@ if [[ "$HOST" == "" ]]; then
 		rm /tmp/arteGuard.tmp
 	fi
 	for i in "${!nodes[@]}"; do
-		if [[ $i == $(grep SCANNER /etc/arteGuard.conf | cut -d'=' -f2) ]]; then
-			salt "${i,,}" cmd.run "service artemis status" >> /tmp/arteGuard.tmp
+		if [[ $i == $SCANNER ]]; then
+			service artemis status >> /tmp/arteGuard.tmp
 		else
 			salt "${i,,}" cmd.run "service artemis-forwarder status" >> /tmp/arteGuard.tmp
 		fi
 	done
 else
         if [[ ${nodes[$HOST]} ]]; then
-		if [[ $HOST == $(grep SCANNER /etc/arteGuard.conf | cut -d'=' -f2) ]]; then
+		if [[ $HOST == $SCANNER ]]; then
 			service artemis status > /tmp/arteGuard.tmp
 		else
 			salt "${HOST,,}" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
