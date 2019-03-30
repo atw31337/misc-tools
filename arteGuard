@@ -151,6 +151,11 @@ if [[ -e /tmp/arteGuard.tmp ]]; then
 fi
 }
 
+# Ensure that arteGuard has been configured
+if ! [[ -f /etc/arteGuard.conf ]]; then
+	config
+fi
+
 # Parse options
 while getopts ":hd:e:sqc" OPT; do
         case $OPT in
@@ -200,7 +205,7 @@ if [[ "$HOST" == "" ]]; then
 	fi
 	for i in "${!nodes[@]}"; do
 		if [[ $i == "$SCANNER" ]]; then
-			echo "$i:" >> /tmp/arteGuard.tmp
+			echo "${i,,}:" >> /tmp/arteGuard.tmp
 			service artemis status >> /tmp/arteGuard.tmp
 		else
 			salt "${i,,}" cmd.run "service artemis-forwarder status" >> /tmp/arteGuard.tmp
@@ -208,7 +213,7 @@ if [[ "$HOST" == "" ]]; then
 	done
 elif [[ ${nodes[$HOST]} ]]; then
 	if [[ $HOST == "$SCANNER" ]]; then
-		echo "$HOST:" > /tmp/arteGuard.tmp
+		echo "${HOST,,}:" > /tmp/arteGuard.tmp
 		service artemis status >> /tmp/arteGuard.tmp
 	else
 		salt "${HOST,,}" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
