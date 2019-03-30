@@ -1,6 +1,6 @@
 #!/bin/bash
 # arteGuard
-# Description: arteGuard retrieves the operational status of artemis on each of the IDS sensors. If artemis is not running, 
+# Description: arteGuard retrieves the operational status of artemis on each of the IDS sensors. If artemis is not running,
 # arteGuard will attempt to restart the service. If the service cannot be restarted, an alert email will be dispatched.
 # Version: 1.0
 # Author: Andrew Withers
@@ -10,15 +10,15 @@ usage()
 cat <<EOF
 
 ArteGuard: Artemis Status Monitor
-Usage: arteGuard [OPTION] <HOSTNAME>
+Usage: arteGuard [HOSTNAME] or [OPTION] <HOSTNAME>
 
 	Options:
 
-		-d <HOSTNAME>	Disables status checking on the specified host
-		-e <HOSTNAME> 	Enables status checking on the specified host
-		-s		Displays the enable/disable status summary
-		-q		Quiet. Non-interactive self-healing mode
-		-c 		Configuration mode
+		-d (<HOSTNAME>|ALL)	Disables status checking on the specified host
+		-e (<HOSTNAME>|ALL) 	Enables status checking on the specified host
+		-s			Displays the enable/disable status summary
+		-q			Quiet. Non-interactive self-healing mode
+		-c 			Configuration mode
 
 EOF
 }
@@ -185,11 +185,13 @@ while getopts ":hd:e:sqc" OPT; do
 		;;
 	\?)
                 echo "Invalid option: -$OPTARG"
-                exit 1
+                usage
+		exit 1
                 ;;
         :)
                 echo "Option -$OPTARG requires an argument."
-                exit 1
+                usage
+		exit 1
 		;;
         esac
 done

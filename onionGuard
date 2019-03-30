@@ -14,8 +14,8 @@ Usage: onionGuard [HOSTNAME] or [OPTION] <HOSTNAME>
 
 	Options:
 
-		-d <HOSTNAME,ALL>       Disables status checking on the specified host
-		-e <HOSTNAME,ALL>       Enables status checking on the specified host
+		-d (<HOSTNAME>|ALL)       Disables status checking on the specified host
+		-e (<HOSTNAME>|ALL)       Enables status checking on the specified host
 		-s		      	Displays the enable/disable status summary
 		-q 			Quiet. Non-interactive self-healing mode.
 		-c			Configuration mode
@@ -238,10 +238,12 @@ while getopts ":hd:e:sqc" OPT; do
 		;;
 	\?)
 		echo "Invalid option: -$OPTARG"
+		usage
 		exit 1
 		;;
 	:)
 		echo "Option -$OPTARG requires an argument."
+		usage
 		exit 1
 		;;
 	esac
