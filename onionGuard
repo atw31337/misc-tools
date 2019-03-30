@@ -205,6 +205,10 @@ if [[ -e /tmp/onionGuard.tmp ]]; then
 fi
 }
 
+if ! [[ -f /etc/onionGuard.conf ]]; then
+	config
+fi
+
 # Parse options
 while getopts ":hd:e:sqc" OPT; do
 	case $OPT in
