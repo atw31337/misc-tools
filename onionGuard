@@ -251,8 +251,9 @@ if [[ "$HOST" == "" ]]; then
 	if [[ -f /tmp/onionGuard.tmp ]]; then
 		rm /tmp/onionGuard.tmp
 	fi
-	for i in "${!nodes[$i]}"; do
+	for i in "${!nodes[@]}"; do
 		if [[ $i == "$SERVER" ]]; then
+			echo "${i,,}:" >> /tmp/onionGuard.tmp
 			so-status >> /tmp/onionGuard.tmp
 		else
 			salt "${i,,}" cmd.run "so-status" >> /tmp/onionGuard.tmp
@@ -260,7 +261,8 @@ if [[ "$HOST" == "" ]]; then
 	done
 elif [[ ${nodes[$HOST]} ]]; then
 	if [[ $HOST == "$SERVER" ]]; then
-		so-status > /tmp/onionGuard.tmp
+		echo "${HOST,,}:" > /tmp/onionGuard.tmp
+		so-status >> /tmp/onionGuard.tmp
 	else
 		salt "${HOST,,}" cmd.run "so-status" > /tmp/onionGuard.tmp
 	fi
