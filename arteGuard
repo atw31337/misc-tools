@@ -88,10 +88,10 @@ while [[ "$confirm" -eq 0 ]]; do
 	done
 	echo "Configuration: "
 	echo "Email address: $EMAIL"
-	echo "Scanner node: ${SCANNER^^}"
+	echo "Scanner node: $SCANNER"
 	echo "Forwarding nodes: "
 	for i in "${hosts[@]}"; do
-		echo "${i^^}"
+		echo "$i"
 	done
 	read -p "Is this configuration correct? [y/N]: " answer
 	if [[ ${answer,,} == 'y' ]]; then
@@ -102,14 +102,14 @@ while [[ "$confirm" -eq 0 ]]; do
 	fi
 done
 cat <<EOF > /etc/arteGuard.conf
-EMAIL="$EMAIL"
-SCANNER=${SCANNER^^}
+EMAIL=$EMAIL
+SCANNER=$SCANNER
 
 ######### Nodes #########
-${HOSTNAME^^}=1
+$HOSTNAME=1
 EOF
 for i in "${hosts[@]}"; do
-	echo "${i^^}=1" >> /etc/arteGuard.conf
+	echo "$i=1" >> /etc/arteGuard.conf
 done
 echo "Configuration complete"
 }
@@ -126,29 +126,22 @@ load_var
 for i in "${!nodes[@]}"; do
 	if [[ ${nodes[$i]} == "1" ]]; then
 		if [[ $i == "$SCANNER" ]]; then
-			service artemis status > /tmp/arteGuard.tmp
-			if grep -q "dead" /tmp/arteGuard.tmp; then
+			if [[ -n $(service artemis status | grep -q "dead") ]]; then
 				service artemis start
-				service artemis status > /arteGuard.tmp
-				if grep -q "dead" /tmp/arteGuard.tmp; then
-					printf "To: %s\nSubject: Artemis Status Alert\nFrom: %s\n\n%s\n%s: Artemis scanner is inactive." "$EMAIL" "$HOSTNAME" "$(date)" "${i,,}" | sendmail -vt
+				if [[ -n $(service artemis status | grep -q "dead") ]]; then
+					printf "To: %s\nSubject: Artemis Status Alert\nFrom: %s\n\n%s\n%s: Artemis scanner is inactive." "$EMAIL" "$HOSTNAME" "$(date)" "$i" | sendmail -vt
 				fi
 			fi
 		else
-			salt "${i,,}" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
-			if grep -q "dead" /tmp/arteGuard.tmp; then
-				salt "${i,,}" cmd.run "service artemis-forwarder start"
-				salt "${i,,}" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
-				if grep -q "dead" /tmp/arteGuard.tmp; then
-					printf "To: %s\nSubject: Artemis Status Alert\nFrom: %s\n\n%s\n%s: Artemis-forwarder is inactive." "$EMAIL" "$HOSTNAME" "$(date)" "${i,,}" | sendmail -vt
+			if [[ -n $(salt "$i" cmd.run "service artemis-forwarder status" | grep -q "dead") ]]; then
+				salt "$i" cmd.run "service artemis-forwarder start"
+				if [[ -n $(salt "$i" cmd.run "service artemis-forwarder status" | grep -q "dead") ]]; then
+					printf "To: %s\nSubject: Artemis Status Alert\nFrom: %s\n\n%s\n%s: Artemis-forwarder is inactive." "$EMAIL" "$HOSTNAME" "$(date)" "$i" | sendmail -vt
 				fi
 			fi
 		fi
 	fi
 done
-if [[ -e /tmp/arteGuard.tmp ]]; then
-        rm /tmp/arteGuard.tmp
-fi
 }
 
 # Ensure that arteGuard has been configured
@@ -200,25 +193,25 @@ done
 load_var
 
 HOST="$1"
-HOST="${HOST^^}"
-if [[ "$HOST" == "" ]]; then
-        if [[ -f /tmp/arteGuard.tmp ]]; then
+HOST="$HOST"
+if [[ -z "$HOST" ]]; then
+        if [[ -e /tmp/arteGuard.tmp ]]; then
 		rm /tmp/arteGuard.tmp
 	fi
 	for i in "${!nodes[@]}"; do
 		if [[ $i == "$SCANNER" ]]; then
-			echo "${i,,}:" >> /tmp/arteGuard.tmp
+			echo "$i:" >> /tmp/arteGuard.tmp
 			service artemis status >> /tmp/arteGuard.tmp
 		else
-			salt "${i,,}" cmd.run "service artemis-forwarder status" >> /tmp/arteGuard.tmp
+			salt "$i" cmd.run "service artemis-forwarder status" >> /tmp/arteGuard.tmp
 		fi
 	done
 elif [[ ${nodes[$HOST]} ]]; then
 	if [[ $HOST == "$SCANNER" ]]; then
-		echo "${HOST,,}:" > /tmp/arteGuard.tmp
+		echo "$HOST:" > /tmp/arteGuard.tmp
 		service artemis status >> /tmp/arteGuard.tmp
 	else
-		salt "${HOST,,}" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
+		salt "$HOST" cmd.run "service artemis-forwarder status" > /tmp/arteGuard.tmp
 	fi
 else
 	echo "Invalid host" > /tmp/arteGuard.tmp
