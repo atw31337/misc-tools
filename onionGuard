@@ -77,9 +77,9 @@ declare hosts
 echo "onionGuard configuration setup"
 while [[ "$confirm" -eq 0 ]]; do
 	read -p "Enter the email address where you would like to receive failure alerts: " EMAIL
-	while ! [[ "$numNodes" =~ ^[1-9]+$ ]]; do
+	while ! [[ "$numNodes" =~ ^[0-9]+$ ]] || [[ "$numNodes" -lt 0 ]]; do
 		read -p "How man sensor nodes will be monitored?: " numNodes
-		if ! [[ "$numNodes" =~ ^[1-9]+$ ]]; then
+		if ! [[ "$numNodes" =~ ^[0-9]+$ ]] || [[ "$numNodes" -lt 0 ]]; then
 			echo "Invalid entry. Try again."
 		fi
 	done
