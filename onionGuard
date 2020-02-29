@@ -72,7 +72,7 @@ enable()
 config() {
 SERVER="$HOSTNAME"
 confirm=0
-numNodes=0
+numNodes=-1
 declare hosts
 echo "onionGuard configuration setup"
 while [[ "$confirm" -eq 0 ]]; do
@@ -140,16 +140,14 @@ for i in "${!nodes[@]}"; do
 				if grep -q "Minion did not return" /tmp/onionGuard.tmp; then	# Minion cannot be reached. Dispatch an alert email
 					printf "To: %s\nSubject: Security Onion Status Alert\nFrom: %s\n\n%s\n%s" "$EMAIL" "$HOSTNAME" "$(date)" "$(cat /tmp/onionGuard.tmp)" | sendmail -vt
 				fi
-			elif grep -q FAIL /tmp/onionGuard.tmp || grep -q stopped /tmp/onionGuard.tmp; then	# Check for stopped or failed processes and attempt to restart
+			elif grep -Eq 'FAIL|stopped|not running' /tmp/onionGuard.tmp; then	# Check for stopped or failed processes and attempt to restart
+				if grep -q 'not running' /tmp/onionGuard.tmp; then
+					echo -e "\n$(date)"
+					salt "${i,,}" cmd.run "so-autossh-restart"
+				fi
 				if grep -q stopped /tmp/onionGuard.tmp; then
-					if  grep stopped /tmp/onionGuard.tmp | grep -q "so-autossh"; then
-						echo -e "\n$(date)"
-						salt "${i,,}" cmd.run "so-autossh-restart"
-					fi
-					if grep stopped /tmp/onionGuard.tmp | grep -vq so-autossh; then
-							echo -e "\n$(date)"
-							salt "${i,,}" cmd.run "so-bro-restart"
-					fi
+					echo -e "\n$(date)"
+					salt "${i,,}" cmd.run "so-bro-restart"
 				fi
 				if grep -q FAIL /tmp/onionGuard.tmp; then
 					for ((c=1; c<=$(grep -c FAIL /tmp/onionGuard.tmp);c++)); do
