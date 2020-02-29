@@ -1,8 +1,7 @@
 #!/bin/bash
 # onionGuard
-# Verifies the operational status of the NSM services on each of the IDS machines. If a service has failed, this script will attempt to restart
+# Verifies the operational status of the Security Onion services on each of the IDS machines. If a service has failed, this script will attempt to restart
 # that service. If the service continues to fail, an alert email will be dispatched.
-# Version: 1.02
 # Author: Andrew Withers
 
 usage()

@@ -2,7 +2,6 @@
 # arteGuard
 # Description: arteGuard retrieves the operational status of artemis on each of the IDS sensors. If artemis is not running,
 # arteGuard will attempt to restart the service. If the service cannot be restarted, an alert email will be dispatched.
-# Version: 1.0
 # Author: Andrew Withers
 
 usage()
