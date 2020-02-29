@@ -150,7 +150,8 @@ for i in "${!nodes[@]}"; do
 					salt "${i,,}" cmd.run "so-bro-restart"
 				fi
 				if grep -q FAIL /tmp/onionGuard.tmp; then
-					for ((c=1; c<=$(grep -c FAIL /tmp/onionGuard.tmp);c++)); do
+					numFailed=$(grep -c FAIL /tmp/onionGuard.tmp)
+					for ((c=1; c<="$numFailed";c++)); do
 						FAILEDPS="$(grep FAIL /tmp/onionGuard.tmp | head -n$c | tail -n1)"
 						if echo "$FAILEDPS" | grep -q "ossec_agent"; then
 							echo -e "\n$(date)"
